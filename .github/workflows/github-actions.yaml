@@ -1,4 +1,4 @@
-name: Build and push Docker image
+name: Deploy Data Pipeline
 
 on:
   push:
@@ -7,71 +7,82 @@ on:
 
 env:
   IMAGE_NAME: my-datascience-notebook
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_REGION: us-east-1
   ECR_REGISTRY: 274127640471.dkr.ecr.us-east-1.amazonaws.com
   INSTANCE_TYPE: t2.micro
-  KEY_NAME: my-ec2-key-pair
-  SECURITY_GROUP_ID: sg-0123456789abcdef
-  SUBNET_ID: subnet-0123456789abcdef
-  EC2_TAG_NAME: my-datascience-notebook
-  EC2_TAG_OWNER: my-username
+  INSTANCE_AMI: ami-0885b1f6bd170450c
+  KEY_NAME: my-ec2-key
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Install AWS CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          sudo pip3 install awscli
-
-      - name: Launch EC2 instance
+      - name: Create EC2 instance
         id: ec2
-        uses: jasonwalsh/gh-aws-ec2@v2.2.0
+        uses: easingthemes/ssh-deploy@v2.4.13
         with:
-          image-id: ami-09f0b8ca1076d14d6 # Amazon Linux 2 LTS
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ec2-key: ${{ env.KEY_NAME }}
+          ec2-user: ubuntu
+          region: ${{ env.AWS_REGION }}
           instance-type: ${{ env.INSTANCE_TYPE }}
-          key-name: ${{ env.KEY_NAME }}
-          security-group-ids: ${{ env.SECURITY_GROUP_ID }}
-          subnet-id: ${{ env.SUBNET_ID }}
-          tag-specifications: |
-            ResourceType=instance,Tags=[{Key=Name,Value=${{ env.EC2_TAG_NAME }}},{Key=Owner,Value=${{ env.EC2_TAG_OWNER }}}]
-          associate-public-ip-address: true
-          wait-for-instance-to-run: true
-          assign-public-ip: ENABLED
-          aws-region: ${{ env.AWS_REGION }}
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          image-id: ${{ env.INSTANCE_AMI }}
+          vpc-subnet-id: ${{ secrets.SUBNET_ID }}
+          security-group-id: ${{ secrets.SECURITY_GROUP_ID }}
+          wait-for-ssh: true
         env:
-          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 400 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ steps.ec2.outputs.public_dns }} >> ~/.ssh/known_hosts
+      - name: Clone repository into EC2 instance
+        uses: easingthemes/ssh-deploy@v2.4.13
+        with:
+          command: |
+            git clone https://github.com/Primus-Learning/data-pipeline-docker.git
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ec2-key: ${{ env.KEY_NAME }}
+          ec2-user: ubuntu
+          host: ${{ steps.ec2.outputs.public-ip }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Install Docker
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y apt-transport-https ca-certificates curl gnupg-agent software-properties-common
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-          sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-          sudo apt-get update
-          sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - name: Install Docker in EC2 instance
+        uses: easingthemes/ssh-deploy@v2.4.13
+        with:
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker.io
+            sudo usermod -aG docker ubuntu
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ec2-key: ${{ env.KEY_NAME }}
+          ec2-user: ubuntu
+          host: ${{ steps.ec2.outputs.public-ip }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Configure AWS CLI
-        run: |
-          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws
+      - name: Configure AWS CLI in EC2 instance
+        uses: easingthemes/ssh-deploy@v2.4.13
+        with:
+          command: |
+            aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+            aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            aws configure set region ${{ env.AWS_REGION }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ec2-key: ${{ env.KEY_NAME }}
+          ec2-user: ubuntu
+          host: ${{ steps.ec2.outputs.public-ip }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Build Docker image in EC2 instance
+        uses: easingthemes/ssh-deploy@v2.4.13
+        with:
+          command: |
+            cd
