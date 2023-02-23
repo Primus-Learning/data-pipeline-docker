@@ -9,52 +9,43 @@ env:
   IMAGE_NAME: my-datascience-notebook
   AWS_REGION: us-east-1
   ECR_REGISTRY: 274127640471.dkr.ecr.us-east-1.amazonaws.com
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
 jobs:
-  build-and-run:
+  build:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get -y install apt-transport-https ca-certificates curl gnupg lsb-release
-        sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-        sudo apt-get update
-        sudo apt-get -y install docker-ce docker-ce-cli containerd.io
-        sudo usermod -aG docker $USER
-        sudo curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        sudo apt-get -y install unzip
-        sudo unzip awscliv2.zip
-        sudo ./aws/install
-        sudo rm -rf awscliv2.zip aws/
-
+      
     - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    
+    - name: Build and tag Docker image
       run: |
-        mkdir ~/.aws
-        echo "[default]" >> ~/.aws/config
-        echo "aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}" >> ~/.aws/config
-        echo "aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> ~/.aws/config
-        echo "region=${{ env.AWS_REGION }}" >> ~/.aws/config
+        docker build -t ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:$GITHUB_SHA .
+        docker tag ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:$GITHUB_SHA ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      
+    - name: Push Docker image to Amazon ECR
+      run: |
+        docker push ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:$GITHUB_SHA
+        docker push ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      
+    - name: Test Docker image
+      run: |
+        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python -c "import pandas; print(pandas.__version__)"
+        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python -c "import boto3; print(boto3.__version__)"
 
-    - name: Clone repository
+    - name: Clean up Docker images
       run: |
-        git clone https://github.com/Primus-Learning/data-pipeline-docker.git
-        cd data-pipeline-docker
-
-    - name: Build Docker image
-      run: |
-        cd data-pipeline-docker
-        sudo docker build -t ${{ env.IMAGE_NAME }} .
-        sudo $(aws ecr get-login --no-include-email --region ${{ env.AWS_REGION }})
-        sudo docker tag ${{ env.IMAGE_NAME }}:latest ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        sudo docker push ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-
-    - name: Execute scripts inside Docker container
-      run: |
-        sudo docker run -it --rm ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python convert-to-s3.py
-        sudo docker run -it --rm ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python pipeline.py
+        docker image prune -f
