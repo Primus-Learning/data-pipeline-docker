@@ -7,10 +7,12 @@ on:
 
 env:
   IMAGE_NAME: my-datascience-notebook
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
   AWS_REGION: us-east-1
   ECR_REGISTRY: 274127640471.dkr.ecr.us-east-1.amazonaws.com
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  ECR_REPOSITORY: data-pipeline
+  ECR_TAG: latest
 
 jobs:
   build:
@@ -20,32 +22,33 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
       
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
+    - name: Build Docker image
+      uses: docker/build-push-action@v2
       with:
-        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
-    
-    - name: Build and tag Docker image
-      run: |
-        docker build -t ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:$GITHUB_SHA .
-        docker tag ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:$GITHUB_SHA ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-      
-    - name: Push Docker image to Amazon ECR
-      run: |
-        docker push ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:$GITHUB_SHA
-        docker push ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-      
+        context: .
+        push: true
+        tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }}
+      env:
+        DOCKER_USERNAME: ${{ env.DOCKER_USERNAME }}
+        DOCKER_PASSWORD: ${{ env.DOCKER_PASSWORD }}
+        AWS_REGION: ${{ env.AWS_REGION }}
+        ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
+        ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        ECR_TAG: ${{ env.ECR_TAG }}
+
     - name: Test Docker image
       run: |
-        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python -c "import pandas; print(pandas.__version__)"
-        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python -c "import boto3; print(boto3.__version__)"
+        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }} python -c "import pandas; print(pandas.__version__)"
+        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }} python -c "import boto3; print(boto3.__version__)"
 
-    - name: Clean up Docker images
+    - name: Copy files to execution directory
       run: |
-        docker image prune -f
+        mkdir -p pipeline
+        cp convert-to-s3.py pipeline/
+        cp pipeline.py pipeline/
+      working-directory: .
+
+    - name: Execute pipeline
+      run: |
+        docker run -it -v ${PWD}/pipeline:/pipeline ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }} python /pipeline/pipeline.py
+      working-directory: . 
