@@ -7,90 +7,54 @@ on:
 
 env:
   IMAGE_NAME: my-datascience-notebook
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_REGION: us-east-1
   ECR_REGISTRY: 274127640471.dkr.ecr.us-east-1.amazonaws.com
 
 jobs:
-  build:
+  build-and-run:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Create EC2 Instance
-      id: ec2
-      uses: appleboy/ec2-instance@master
-      with:
-        name: my-instance
-        key_name: my-key-pair
-        security_group_id: my-security-group
-        subnet_id: my-subnet
-        ami_id: ami-0c94855ba95c71c99
-        instance_type: t2.micro
-        wait_timeout: 120
-        tags: name=my-instance
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        AWS_REGION: ${{ env.AWS_REGION }}
+    - name: Checkout code
+      uses: actions/checkout@v2
 
-    - name: Install Docker and Git
-      uses: appleboy/ansible-action@v0.1.2
-      with:
-        playbook: |
-          - name: Install Docker and Git
-            hosts: all
-            become: true
-            vars:
-              docker_version: "20.10.12"
-            tasks:
-              - name: Install Python and pip
-                become: true
-                apt:
-                  name: [python3, python3-pip]
-                  state: present
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install apt-transport-https ca-certificates curl gnupg lsb-release
+        sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        sudo apt-get update
+        sudo apt-get -y install docker-ce docker-ce-cli containerd.io
+        sudo usermod -aG docker $USER
+        sudo curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        sudo apt-get -y install unzip
+        sudo unzip awscliv2.zip
+        sudo ./aws/install
+        sudo rm -rf awscliv2.zip aws/
 
-              - name: Install Docker
-                become: true
-                apt:
-                  name: [apt-transport-https, ca-certificates, curl, gnupg, lsb-release]
-                  state: present
-              - name: Add Docker apt-key
-                become: true
-                shell: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-              - name: Add Docker repository
-                become: true
-                shell: echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-              - name: Install Docker engine
-                become: true
-                apt:
-                  name: docker-ce={{ docker_version }} docker-ce-cli={{ docker_version }} containerd.io
-                  state: present
-              - name: Add user to Docker group
-                become: true
-                user:
-                  name: ubuntu
-                  groups: docker
-                  append: yes
-              - name: Install Git
-                become: true
-                apt:
-                  name: git
-                  state: present
+    - name: Configure AWS credentials
+      run: |
+        mkdir ~/.aws
+        echo "[default]" >> ~/.aws/config
+        echo "aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}" >> ~/.aws/config
+        echo "aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> ~/.aws/config
+        echo "region=${{ env.AWS_REGION }}" >> ~/.aws/config
 
     - name: Clone repository
       run: |
         git clone https://github.com/Primus-Learning/data-pipeline-docker.git
         cd data-pipeline-docker
-        git checkout main
 
     - name: Build Docker image
       run: |
         cd data-pipeline-docker
-        docker build -t ${{ env.IMAGE_NAME }} .
+        sudo docker build -t ${{ env.IMAGE_NAME }} .
+        sudo $(aws ecr get-login --no-include-email --region ${{ env.AWS_REGION }})
+        sudo docker tag ${{ env.IMAGE_NAME }}:latest ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        sudo docker push ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-    - name: Push Docker image to ECR
+    - name: Execute scripts inside Docker container
       run: |
-        $(aws ecr get-login --no-include-email
+        sudo docker run -it --rm ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python convert-to-s3.py
+        sudo docker run -it --rm ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python pipeline.py
