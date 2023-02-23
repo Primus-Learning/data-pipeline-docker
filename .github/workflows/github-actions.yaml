@@ -9,10 +9,10 @@ env:
   IMAGE_NAME: my-datascience-notebook
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_REGION: us-east-1
   ECR_REGISTRY: 274127640471.dkr.ecr.us-east-1.amazonaws.com
-  ECR_REPOSITORY: data-pipeline
-  ECR_TAG: latest
 
 jobs:
   build:
@@ -21,34 +21,31 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
-      
+
+    - name: Copy scripts
+      run: |
+        mkdir -p scripts
+        cp convert-to-s3.py scripts/
+        cp pipeline.py scripts/
+
     - name: Build Docker image
       uses: docker/build-push-action@v2
       with:
         context: .
         push: true
-        tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }}
+        tags: ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
       env:
         DOCKER_USERNAME: ${{ env.DOCKER_USERNAME }}
         DOCKER_PASSWORD: ${{ env.DOCKER_PASSWORD }}
-        AWS_REGION: ${{ env.AWS_REGION }}
-        ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
-        ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        ECR_TAG: ${{ env.ECR_TAG }}
 
     - name: Test Docker image
       run: |
-        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }} python -c "import pandas; print(pandas.__version__)"
-        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }} python -c "import boto3; print(boto3.__version__)"
+        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python -c "import pandas; print(pandas.__version__)"
+        docker run -it ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest python -c "import boto3; print(boto3.__version__)"
 
-    - name: Copy files to execution directory
+    - name: Clean up Docker images
       run: |
-        mkdir -p pipeline
-        cp convert-to-s3.py pipeline/
-        cp pipeline.py pipeline/
-      working-directory: .
-
-    - name: Execute pipeline
-      run: |
-        docker run -it -v ${PWD}/pipeline:/pipeline ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.ECR_TAG }} python /pipeline/pipeline.py
-      working-directory: . 
+        docker image prune -f
