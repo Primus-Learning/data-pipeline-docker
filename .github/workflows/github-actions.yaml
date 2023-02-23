@@ -1,0 +1,39 @@
+name: Build and push Docker image
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: my-datascience-notebook
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      
+    - name: Build Docker image
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        push: true
+        tags: ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+      env:
+        DOCKER_USERNAME: ${{ env.DOCKER_USERNAME }}
+        DOCKER_PASSWORD: ${{ env.DOCKER_PASSWORD }}
+
+    - name: Test Docker image
+      run: |
+        docker run -it ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest python -c "import pandas; print(pandas.__version__)"
+        docker run -it ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest python -c "import boto3; print(boto3.__version__)"
+
+    - name: Clean up Docker images
+      run: |
+        docker image prune -f
+
